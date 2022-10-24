@@ -181,9 +181,8 @@ void* client_session_thread(void *arg)
 	float deposit;
 	float customerBalance;
 
-	/*store sd and free the dynamically allocated memory for the socked desciptor passed in from pthread_create() */
+	/*store the socked descriptor passed in from pthread_create() */
 	sd = *(int *)arg;
-	free(arg);
 
 	/*Won't have anyone joining on this thread so we can detach self */
 	pthread_detach(pthread_self());
@@ -414,7 +413,6 @@ void *session_acceptor_thread(void *ignore)
 {
 	int sd;
 	int fd;
-	int *fdptr;
 	struct sockaddr_in addr;
 	struct sockaddr_in senderAddr;
 	socklen_t ic;
@@ -452,9 +450,7 @@ void *session_acceptor_thread(void *ignore)
 		/* accept loop, spawns a new client thread if a succesfull connection occurs , passes in the sd */
 		while ((fd = accept(sd, (struct sockaddr *)&senderAddr, &ic)) != -1)
 		{
-			fdptr = (int *)malloc(sizeof(int));
-			*fdptr = fd;
-			if (pthread_create(&tid, &kernelAttribute, client_session_thread, fdptr) != 0)
+			if (pthread_create(&tid, &kernelAttribute, client_session_thread, &fd) != 0)
 			{
 				printf("pthread_create() failed in %s()\n", func);
 				return 0;
