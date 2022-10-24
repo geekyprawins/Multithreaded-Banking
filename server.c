@@ -1,39 +1,102 @@
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <errno.h>
-#include <semaphore.h>
+#include <netinet/in.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #define CLIENT_PORT 35532
 #define MAX_CUSTOMERS 20
 
-int serve(char *);
-int createAccount(char *);
-
-struct account
+typedef struct
 {
 	char accountName[100];
 	int isInUse;
 	float balance;
-};
+}Account;
 
-static pthread_attr_t userAttribute;
-static pthread_attr_t kernelAttribute;
-static sem_t actionLock;
-static struct account customers[MAX_CUSTOMERS];
-static pthread_mutex_t customerMutex[MAX_CUSTOMERS];
-static pthread_mutex_t bankMutex;
-static int connectionCount = 0;
+/* Global variables used */
+static pthread_attr_t	kernelAttribute;
+static sem_t			actionLock;
+static Account			customers[MAX_CUSTOMERS];
+static pthread_mutex_t	customerMutex[MAX_CUSTOMERS];
+static pthread_mutex_t	bankMutex;
+static int				connectionCount = 0;
 
-static void
-set_iaddr(struct sockaddr_in *sockaddr, long x, unsigned int port)
+/* Function prototypes */
+int		serve(char *);
+int		createAccount(char *);
+void	set_iaddr(struct sockaddr_in *sockaddr, long x, unsigned int port);
+char*	ps(unsigned int x, char *s, char *p);
+void	periodic_action_handler(int signo, siginfo_t *ignore, void *ignore2);
+void*	periodic_action_cycle_thread(void *ignore);
+void*	session_acceptor_thread(void *ignore);
+
+int main(int argc, char **argv)
+{
+	pthread_t tid;
+	char *func = "server main";
+	int i;
+	
+	// Initialize customers and their associated mutexes with default values
+	for (i = 0; i < MAX_CUSTOMERS; i++)
+	{
+		strcat(customers[i].accountName, "");
+		customers[i].isInUse = -1;
+		customers[i].balance = 0;
+
+		if (pthread_mutex_init(&customerMutex[i], NULL) != 0)
+		{
+			printf("#%i pthread_mutex_init() failed in %s()\n", i, func);
+			return 0;
+		}
+	}
+
+	/* pthread_attr and mutex  initializations as well as pthread_create for session acceptor anb periodic action handler*/
+	if (pthread_attr_init(&kernelAttribute) != 0)
+	{
+		printf("pthread_attr_init() failed in %s()\n", func);
+		return 0;
+	}
+	else if (pthread_attr_setscope(&kernelAttribute, PTHREAD_SCOPE_SYSTEM) != 0)
+	{
+		printf("pthread_attr_setscope() failed in %s() line %d\n", func, __LINE__);
+		return 0;
+	}
+	else if (sem_init(&actionLock, 0, 0) != 0)
+	{
+		printf("sem_init() failed in %s()\n", func);
+		return 0;
+	}
+	else if (pthread_mutex_init(&bankMutex, NULL) != 0)
+	{
+		printf("pthread_mutex_init() failed in %s()\n", func);
+		return 0;
+	}
+	else if (pthread_create(&tid, &kernelAttribute, session_acceptor_thread, 0) != 0)
+	{
+		printf("pthread_create() failed in %s()\n", func);
+		return 0;
+	}
+	else if (pthread_create(&tid, &kernelAttribute, periodic_action_cycle_thread, 0) != 0)
+	{
+		printf("pthread_create() failed in %s()\n", func);
+		return 0;
+	}
+	else
+	{
+		printf("server is ready to receive client connections ...\n");
+		pthread_exit(0);
+	}
+}
+
+void set_iaddr(struct sockaddr_in *sockaddr, long x, unsigned int port)
 {
 	memset(sockaddr, 0, sizeof(*sockaddr));
 	sockaddr->sin_family = AF_INET;
@@ -41,8 +104,7 @@ set_iaddr(struct sockaddr_in *sockaddr, long x, unsigned int port)
 	sockaddr->sin_addr.s_addr = htonl(x);
 }
 
-static char *
-ps(unsigned int x, char *s, char *p)
+char* ps(unsigned int x, char *s, char *p)
 {
 	return x == 1 ? s : p;
 }
@@ -55,8 +117,7 @@ void periodic_action_handler(int signo, siginfo_t *ignore, void *ignore2)
 	}
 }
 
-void *
-periodic_action_cycle_thread(void *ignore)
+void *periodic_action_cycle_thread(void *ignore)
 {
 	/* Variables declaration, index, sigaction struct and timer */
 	int i;
@@ -81,7 +142,7 @@ periodic_action_cycle_thread(void *ignore)
 	// ITIMER_REAL counts down in real time
 	// which newvalue oldvalue
 	setitimer(ITIMER_REAL, &interval, 0);
-	for (;;) /* infinite loop */
+	while(1) /* infinite loop */
 	{
 		/* decrement sem count and lock a mutex to go through the bank accounts!*/
 		sem_wait(&actionLock);
@@ -107,8 +168,7 @@ periodic_action_cycle_thread(void *ignore)
 	return 0;
 }
 
-void *
-client_session_thread(void *arg)
+void* client_session_thread(void *arg)
 {
 	int sd;			  /*socket descriptor */
 	int currentIndex; /* -1 if not loged in , index of account[] when loged in */
@@ -350,8 +410,7 @@ client_session_thread(void *arg)
 	return 0;
 }
 
-void *
-session_acceptor_thread(void *ignore)
+void *session_acceptor_thread(void *ignore)
 {
 	int sd;
 	int fd;
@@ -410,84 +469,17 @@ session_acceptor_thread(void *ignore)
 	}
 }
 
-int main(int argc, char **argv)
-{
-	pthread_t tid;
-	char *func = "server main";
-	int i;
-	/*
-	 * initialize the array of customers before spawning threads
-	 */
-	for (i = 0; i < MAX_CUSTOMERS; i++)
-	{
-		strcat(customers[i].accountName, "");
-		customers[i].isInUse = -1;
-		customers[i].balance = 0;
-
-		/*mutex initialization for all 20 customers!*/
-
-		if (pthread_mutex_init(&customerMutex[i], NULL) != 0)
-		{
-			printf("#%i pthread_mutex_init() failed in %s()\n", i, func);
-			return 0;
-		}
-	}
-
-	/* pthread_attr and mutex  initializations as well as pthread_create for session acceptor anb periodic action handler*/
-	if (pthread_attr_init(&userAttribute) != 0)
-	{
-		printf("pthread_attr_init() failed in %s()\n", func);
-		return 0;
-	}
-	else if (pthread_attr_init(&kernelAttribute) != 0)
-	{
-		printf("pthread_attr_init() failed in %s()\n", func);
-		return 0;
-	}
-	else if (pthread_attr_setscope(&kernelAttribute, PTHREAD_SCOPE_SYSTEM) != 0)
-	{
-		printf("pthread_attr_setscope() failed in %s() line %d\n", func, __LINE__);
-		return 0;
-	}
-	else if (sem_init(&actionLock, 0, 0) != 0)
-	{
-		printf("sem_init() failed in %s()\n", func);
-		return 0;
-	}
-	else if (pthread_mutex_init(&bankMutex, NULL) != 0)
-	{
-		printf("pthread_mutex_init() failed in %s()\n", func);
-		return 0;
-	}
-	else if (pthread_create(&tid, &kernelAttribute, session_acceptor_thread, 0) != 0)
-	{
-		printf("pthread_create() failed in %s()\n", func);
-		return 0;
-	}
-	else if (pthread_create(&tid, &kernelAttribute, periodic_action_cycle_thread, 0) != 0)
-	{
-		printf("pthread_create() failed in %s()\n", func);
-		return 0;
-	}
-	else
-	{
-		printf("server is ready to receive client connections ...\n");
-		pthread_exit(0);
-	}
-}
-
 /*
  * Serve checks for account existence. If account is found, returns its index
  * in the bank struct array to be used for serve !
  */
 int serve(char *acc_name)
 {
-	int i;
 	if (strcmp(acc_name, "") == 0)
 	{
 		return -1;
 	}
-	for (i = 0; i < MAX_CUSTOMERS; i++)
+	for (int i = 0; i < MAX_CUSTOMERS; i++)
 	{
 		if (customers[i].accountName != NULL)
 		{
@@ -498,7 +490,6 @@ int serve(char *acc_name)
 			}
 		}
 	}
-
 	return -1;
 }
 
