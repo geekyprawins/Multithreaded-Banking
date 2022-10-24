@@ -1,7 +1,9 @@
 	CC=gcc
 
-FLAGS = -pthread -Wall -Werror -pedantic
-
+FLAGS = -pthread -Wall -pedantic
+#pthread: Link to threaded library
+# pedantic: it warns if you are performing OS specific optimisation
+# Wall all warnings turned on
 ALL:client server
 
 client: client.o 
@@ -17,5 +19,3 @@ client.o: client.c
 
 clean:
 	rm -rf *.o client server
-
-

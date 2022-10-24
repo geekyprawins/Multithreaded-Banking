@@ -1,0 +1,7 @@
+
+1) Hardcode the Ip address
+2) You can access another account while you are already logged in
+3) list command hasnt been implemented
+4) Make the program menu driven
+Readup about sig structure and flags 
+ 
