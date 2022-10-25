@@ -7,15 +7,15 @@ FLAGS = -pthread -Wall -pedantic
 ALL:client server
 
 client: client.o 
-	$(CC) $(FLAGS) client.o -o client 
+	$(CC) $(FLAGS) client.o -o client -g
 server: server.o
-	$(CC) $(FLAGS) server.o -o server
+	$(CC) $(FLAGS) server.o -o server -g
 
 server.o: server.c
-	$(CC) $(FLAGS) -c server.c 
+	$(CC) $(FLAGS) -c server.c -g
 
 client.o: client.c 
-	$(CC) $(FLAGS) -c client.c
+	$(CC) $(FLAGS) -c client.c -g
 
 clean:
 	rm -rf *.o client server
