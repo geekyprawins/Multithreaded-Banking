@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/fcntl.h>
 #include <unistd.h>
 
 #define SERVER_IP "127.0.0.1" // MODIFY LATER
@@ -180,14 +181,13 @@ void login()
 void access_account()
 {
 	char option;
-	int length;
 	do{
-		sprintf(buffer, "query %s", name);
+		strcpy(buffer, "query");
 		send_and_recv();
 
 		clear_screen();
 		printf("\nAccessing Sure Ya Bank Account\n");
-		printf("%s\n\n", buffer);
+		printf("\n%s\n\n", buffer);
 		printf("Options\n");
 		printf("\na. Withdraw Money\n");
 		printf("b. Deposit Money\n");
@@ -204,16 +204,16 @@ void access_account()
 			break;
 		case 'b':
 			printf("Enter amount to deposit: ");
-			input_string(buffer, 20);
+			input_string(buffer2, 20);
 			sprintf(buffer, "deposit %s", buffer2);
 			break;
 		case 'c':
-			/*
 			printf("Enter account name to transfer to: ");
 			input_string(buffer2, 100);
+			sprintf(buffer, "transfer %s\n", buffer2);
 			printf("\nEnter amount to transfer: ");
-			input_string(buffer, 20);
-			*/
+			input_string(buffer2, 20);
+			strcat(buffer, buffer2);
 			break;
 		case 'd':
 			strcpy(buffer, "end");
@@ -229,16 +229,10 @@ void access_account()
 			press_enter();
 		}
 	}while(option != 'd');
-	
-	strcpy(buffer, "end");
-	length = strlen(buffer)+1;
-	if(write(clientSocket, buffer, length) != length)
-	{
-		disconnection();
-	}
 }
 
-void create_account(){
+void create_account()
+{
 	clear_screen();
 	printf("\nCreating a Sure Ya Bank Account\n");
 	printf("\nEnter name: ");
@@ -254,13 +248,19 @@ void create_account(){
 	press_enter();
 }
 
-void load_from_file(const char* fileName){
-
+void load_from_file(const char* fileName)
+{
+	FILE *fp = fopen(fileName, "rb");
+	if(fp){
+		int ch;
+		while ((ch = getc(fp)) != EOF){ putchar(ch); }
+		fclose(fp);
+	}
 }
 
 void credit_screen(){
 	clear_screen();
-	load_from_file("credit.txt");
+	load_from_file("credits.txt");
 }
 
 void disconnection(){
