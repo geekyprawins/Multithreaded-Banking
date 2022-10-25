@@ -21,6 +21,15 @@ typedef struct
 	float balance;
 }Account;
 
+enum BankError{
+	NO_ACCOUNT=-10,
+	ACCOUNT_EXISTS,
+	ACCOUNT_IN_USE,
+	INSUFFICIENT_BALANCE,
+	SERVER_FULL,
+	NO_ERROR=0
+};
+
 /* Global variables used */
 static pthread_attr_t	kernelAttribute;
 static sem_t			actionLock;
@@ -30,13 +39,18 @@ static pthread_mutex_t	bankMutex;
 static int				connectionCount = 0;
 
 /* Function prototypes */
-int		serve(char *);
-int		createAccount(char *);
+float	parse_float(const char* string);
+void	server_response(int sock, char* response);
+void	close_connection(int sock);
+
+int		serveAccount(char* accountName);
+int		createAccount(char* accountName);
 void	set_iaddr(struct sockaddr_in *sockaddr, long x, unsigned int port);
 char*	ps(unsigned int x, char *s, char *p);
 void	periodic_action_handler(int signo, siginfo_t *ignore, void *ignore2);
 void*	periodic_action_cycle_thread(void *ignore);
 void*	session_acceptor_thread(void *ignore);
+
 
 int main(int argc, char **argv)
 {
@@ -148,8 +162,7 @@ void *periodic_action_cycle_thread(void *ignore)
 		sem_wait(&actionLock);
 		pthread_mutex_lock(&bankMutex);
 		printf("There %s %d active %s.\nCustomers:\n", ps(connectionCount, "is", "are"),
-			   connectionCount, ps(connectionCount, "connection", "connections"));
-		/* Print the bank! */
+			connectionCount, ps(connectionCount, "connection", "connections"));
 		for (i = 0; i < MAX_CUSTOMERS; i++)
 		{
 			if (customers[i].isInUse == 1)
@@ -168,245 +181,185 @@ void *periodic_action_cycle_thread(void *ignore)
 	return 0;
 }
 
-void* client_session_thread(void *arg)
+float parse_float(const char* string){
+	// Buffer used during float conversions
+	static char floatNumBuffer[32];
+	float num = atof(string);
+	sprintf(floatNumBuffer, "%0.2f", num);
+	return atof(floatNumBuffer);
+}
+
+void server_response(int sock, char* response)
 {
-	int sd;			  /*socket descriptor */
-	int currentIndex; /* -1 if not loged in , index of account[] when loged in */
-	char request[2048];
-	char *response;
-	char f_buffer[1024]; /* buffer for float to string conversion */
-	char *buffer;		 /* buffer for parsing the input */
-	/* floats for account balance operations */
-	float withdraw;
-	float deposit;
-	float customerBalance;
+	write(sock, response, strlen(response)+1);
+	printf("%s\n", response);
+}
 
-	/*store the socked descriptor passed in from pthread_create() */
-	sd = *(int *)arg;
-
-	/*Won't have anyone joining on this thread so we can detach self */
-	pthread_detach(pthread_self());
-
-	/*lock mutex , increase the connection count then unlock */
-	pthread_mutex_lock(&bankMutex);
-	++connectionCount;
-	pthread_mutex_unlock(&bankMutex);
-
-	/*make cur customer index -1, this will be changed if a user calls serve (logs in) succesfully
-	 *changed back to -1  when he calls end(logs out) */
-	currentIndex = -1;
-
-	printf("New Client has connected!\n");
-
-	/* while we can keep reading, basically an infinite loop , server quits when we pass in SIGINT from shell */
-	while (read(sd, request, sizeof(request)) > 0)
-	{
-		printf("\nserver gets input:  %s\n", request);
-
-		/* Command parse for the client*/
-		if (strncmp(request, "create ", 7) == 0)
-		{
-			if (currentIndex != -1)
-			{
-				response = "Logout first to create a new account!";
-				write(sd, response, strlen(response) + 1);
-				response = NULL; /* zero out the buffer */
-				continue;
-			}
-			/* parse request */
-			request[strlen(request) - 1] = '\0'; /*consume newline */
-			buffer = request + 7;				 /*begin past the initial command + space*/
-
-			pthread_mutex_lock(&bankMutex);
-			if (createAccount(buffer) == -1)
-			{
-				response = "Failed to create a new account`!";
-				write(sd, response, strlen(response) + 1);
-				response = NULL; /* zero out the buffer */
-			}
-			pthread_mutex_unlock(&bankMutex);
-
-			response = "New account created!";
-			write(sd, response, strlen(response) + 1);
-			response = NULL; /* zero out the buffer */
-			buffer = NULL;
-		}
-		else if (strncmp(request, "serve ", 6) == 0)
-		{
-			/*parse request */
-			request[strlen(request) - 1] = '\0'; /*eat the \n at the end */
-			buffer = request + 6;
-			/*if cur_customer_index = -1 (this client hasn't loged into anything yet the
-			 *lock mutex and check if the customer exists */
-			if (currentIndex == -1)
-			{
-				pthread_mutex_lock(&bankMutex);
-				if ((currentIndex = serve(buffer)) == -1)
-				{
-
-					response = "Account currently logged in or doesn't exist";
-					write(sd, response, strlen(response) + 1);
-					response = NULL;
-				}
-				pthread_mutex_unlock(&bankMutex);
-			}
-			if (currentIndex != -1)
-			{
-				response = "Login success!";
-				write(sd, response, strlen(response) + 1);
-				response = NULL;
-			}
-			buffer = NULL; /*zero out the buffer */
-		}
-		else if (strncmp(request, "quit", 4) == 0)
-		{
-			/* Check if customer is loged in so we dont deadlock the account before he comes back*/
-			if (currentIndex != -1)
-			{
-				pthread_mutex_lock(&customerMutex[currentIndex]);
-
-				customers[currentIndex].isInUse = 0;
-
-				pthread_mutex_unlock(&customerMutex[currentIndex]);
-			}
-
-			/* we're done here.. close sd, quit thread! */
-			close(sd);
-			pthread_exit(0);
-		}
-		else if (strncmp(request, "end", 3) == 0)
-		{
-			if (currentIndex == -1)
-			{
-				response = "Need to log into an account to logout!";
-				write(sd, response, strlen(response) + 1);
-				response = NULL; /* zero out the buffer */
-				continue;
-			}
-			/*lock a mutex and change the isInUse variable for currently logged in account to 0 */
-			pthread_mutex_lock(&customerMutex[currentIndex]);
-
-			customers[currentIndex].isInUse = 0;
-
-			pthread_mutex_unlock(&customerMutex[currentIndex]);
-
-			/*Client is no longer in use, reset the current index to -1 */
-			currentIndex = -1;
-			response = "Successfully loged out!";
-			write(sd, response, strlen(response) + 1);
-			buffer = NULL;
-			response = NULL;
-		}
-		else if (strncmp(request, "deposit ", 8) == 0)
-		{
-			if (currentIndex == -1)
-			{
-				response = "Need to log into an account to deposit!";
-				write(sd, response, strlen(response) + 1);
-				response = NULL; /* zero out the buffer */
-				continue;
-			}
-			/*parse input from the end of the deposit command, if it cannot be parsed we get 0.00 */
-			deposit = strtof(request + 8, NULL);
-
-			/*check for successful parse, and that deposit isn't a negative (because then we're withdrawing) */
-			if (deposit != 0.0 && deposit >= 0)
-			{
-				/*lock a mutex and add to the customer's balance */
-				pthread_mutex_lock(&customerMutex[currentIndex]);
-
-				customers[currentIndex].balance += deposit;
-
-				pthread_mutex_unlock(&customerMutex[currentIndex]);
-				deposit = 0;
-				response = "Deposit success";
-				write(sd, response, strlen(response) + 1);
-				response = NULL;
-			}
-			else /*if parse failed we got an invalid number as an argument */
-			{
-				write(sd, "Invalid number!", 15);
-			}
-		}
-		else if (strncmp(request, "withdraw ", 9) == 0)
-		{
-			if (currentIndex == -1)
-			{
-				response = "Need to log into an account to withdraw!";
-				write(sd, response, strlen(response) + 1);
-				response = NULL;
-				continue;
-			}
-			/* parse withdraw to be a float , start checking from the end of "withdraw" command */
-			withdraw = strtof(request + 9, NULL);
-
-			/* check for successful parse (i.e not 0.00) and if withdraw isn't negative
-				(subtracting that would add to account .. if only we could do that ... */
-			if (withdraw != 0.0 && withdraw >= 0)
-			{
-				/*if parse is good, lock mutex , check if customer has enough money to withdraw
-					then subtract deposit amount */
-				pthread_mutex_lock(&customerMutex[currentIndex]);
-
-				if (customers[currentIndex].balance >= withdraw)
-				{
-					customers[currentIndex].balance -= withdraw;
-					/* confirm success */
-					response = "Withdraw success";
-					write(sd, response, strlen(response) + 1);
-					response = NULL;
-				}
-				else
-				{
-					response = "Not enough money in the account!";
-					write(sd, response, strlen(response) + 1);
-					response = NULL; /* zero out the buffer */
-									 /* reset the withdraw variable */
-				}
-				/*unlock*/
-				pthread_mutex_unlock(&customerMutex[currentIndex]);
-			}
-			else
-			{
-				write(sd, "Invalid number!", 15);
-			}
-			withdraw = 0;
-		}
-		else if (strncmp(request, "query", 5) == 0)
-		{
-			if (currentIndex == -1)
-			{
-				response = "Need to log into an account to check balance!";
-				write(sd, response, strlen(response) + 1);
-				response = NULL; /* zero out the buffer */
-				continue;
-			}
-
-			/* lock mutex, store the current logged in account's balance, unlock then write it  to sd */
-			pthread_mutex_lock(&customerMutex[currentIndex]);
-
-			customerBalance = customers[currentIndex].balance;
-
-			pthread_mutex_unlock(&customerMutex[currentIndex]);
-
-			/*write the amount of money to the buffer whilst converting from float to char * */
-			snprintf(f_buffer, sizeof(f_buffer), "%.2f", customerBalance);
-			write(sd, f_buffer, strlen(f_buffer) + 1);
-		}
-		else
-		{
-			response = "Unknown Command";
-			write(sd, response, strlen(response) + 1);
-			response = NULL;
-		}
-	}
-
-	/* client quit so close the socket descriptor and decrement connection count */
-	close(sd);
+void close_connection(int sock){
+	// Closing connection and decrementing connectionCount
+	close(sock);
 	pthread_mutex_lock(&bankMutex);
 	--connectionCount;
 	pthread_mutex_unlock(&bankMutex);
-	return 0;
+}
+
+void* client_session_thread(void *arg)
+{
+	// main thread will not be waiting for this thread, so let us detach it
+	pthread_detach(pthread_self());
+
+	// Get mutex lock for connectionCount and increment it
+	pthread_mutex_lock(&bankMutex);
+	++connectionCount;
+	pthread_mutex_unlock(&bankMutex);
+	printf("New Client has connected!\n");
+
+	// Server socket for handling client
+	int sock = *(int *)arg;
+
+	// Holds index of current Account being handled.
+	// Initialized to NO_ACCOUNT
+	int currentIndex = NO_ACCOUNT;
+	
+	// Buffers for input and output
+	char request[256], response[256];
+
+	// Server keeps accepting input from client.
+	// When client disconnects, read() returns 0 and the server will close connection.
+	while(read(sock, request, sizeof(request)) > 0)
+	{
+		printf("\nServer received input:  %s\n", request);
+		if(currentIndex == NO_ACCOUNT)
+		{
+			if(strncmp(request, "create ", 7) == 0)
+			{
+				pthread_mutex_lock(&bankMutex);
+				int status = createAccount(request+7);
+				pthread_mutex_unlock(&bankMutex);
+				switch(status){
+				case ACCOUNT_EXISTS:
+					sprintf(response, "Error: Account for %s already exists", request+7);
+					break;
+				case SERVER_FULL:
+					sprintf(response, "Error: No memory left for more accounts");
+					break;
+				
+				default:
+					sprintf(response, "Success: Account for %s was created", request+7);
+				}
+				server_response(sock, response);
+			}
+			else if(strncmp(request, "serve ", 6) == 0)
+			{
+				pthread_mutex_lock(&bankMutex);
+				int status = serveAccount(request+6);
+				switch(status){
+				case NO_ACCOUNT:
+					sprintf(response, "Error: Account %s does not exist", request+6);
+					break;
+				case ACCOUNT_IN_USE:
+					sprintf(response, "Error: Account %s is already in use", request+6);
+					break;
+				
+				default:
+					currentIndex = status;
+					sprintf(response, "Success: Successfully logged into %s's account", request+6);
+					break;
+				}
+				pthread_mutex_unlock(&bankMutex);
+				server_response(sock, response);
+			}
+			else if(strncmp(request, "quit", 4) == 0)
+			{
+				printf("HERE");
+				pthread_mutex_lock(&customerMutex[currentIndex]);
+				customers[currentIndex].isInUse = 0;
+				pthread_mutex_unlock(&customerMutex[currentIndex]);
+				printf("HUNAGAMA");
+				close_connection(sock);
+				printf("POGO");
+				exit(0);
+			}
+			else
+			{
+				server_response(sock, "Error: Unknown command sent");
+			}
+		}
+		else
+		{
+			if(strncmp(request, "query", 5) == 0)
+			{
+				pthread_mutex_lock(&customerMutex[currentIndex]);	
+				float balance = customers[currentIndex].balance;
+				pthread_mutex_unlock(&customerMutex[currentIndex]);
+				sprintf(response, "Account Name: %s\nBalance:     Rs %.2f", 
+					customers[currentIndex].accountName, balance);
+				server_response(sock, response);
+			}
+			else if(strncmp(request, "end", 3) == 0)
+			{
+				pthread_mutex_lock(&customerMutex[currentIndex]);
+				customers[currentIndex].isInUse = 0;
+				pthread_mutex_unlock(&customerMutex[currentIndex]);
+				sprintf(response, "Success: Logged out from %s's account", customers[currentIndex].accountName);
+				server_response(sock, response);
+				currentIndex = -1;
+			}
+			else if(strncmp(request, "deposit ", 8) == 0)
+			{
+				float amount = parse_float(request+8);
+				if (amount > 0)
+				{
+					pthread_mutex_lock(&customerMutex[currentIndex]);
+					customers[currentIndex].balance += amount;
+					pthread_mutex_unlock(&customerMutex[currentIndex]);
+					sprintf(response, "Success: %s deposited Rs %0.2f into account", 
+						customers[currentIndex].accountName, amount);
+					server_response(sock, response);
+				}
+				else
+				{
+					sprintf(response, "Error: %s send an invalid number", 
+						customers[currentIndex].accountName);
+					server_response(sock, response);
+				}
+			}
+			else if (strncmp(request, "withdraw ", 9) == 0)
+			{
+				float amount = parse_float(request+8);
+				if (amount > 0)
+				{
+					pthread_mutex_lock(&customerMutex[currentIndex]);
+					if (customers[currentIndex].balance >= amount)
+					{
+						customers[currentIndex].balance -= amount;
+						sprintf(response, "Success: %s withdrew Rs %0.2f from account", 
+							customers[currentIndex].accountName, amount);
+						server_response(sock, response);
+					}
+					else
+					{
+						sprintf(response, "Error: %s has insufficient balance for withdrawal of %.2f", 
+							customers[currentIndex].accountName, amount);
+						server_response(sock, response);
+					}
+					pthread_mutex_unlock(&customerMutex[currentIndex]);
+				}
+				else
+				{
+					sprintf(response, "Error: %s send an invalid number", 
+						customers[currentIndex].accountName);
+					server_response(sock, response);
+				}
+			}
+			else
+			{
+				server_response(sock, "Error: Unknown command sent");
+			}
+		}
+	}
+	close_connection(sock);
+	exit(0);
 }
 
 void *session_acceptor_thread(void *ignore)
@@ -438,7 +391,7 @@ void *session_acceptor_thread(void *ignore)
 		close(sd);
 		return 0;
 	}
-	else if (listen(sd, 100) == -1)
+	else if (listen(sd, MAX_CUSTOMERS) == -1)
 	{
 		printf("listen() failed in %s() line %d errno %d\n", func, __LINE__, errno); /*listen to at most 100 connections */
 		close(sd);
@@ -469,55 +422,44 @@ void *session_acceptor_thread(void *ignore)
  * Serve checks for account existence. If account is found, returns its index
  * in the bank struct array to be used for serve !
  */
-int serve(char *acc_name)
+int serveAccount(char *acc_name)
 {
-	if (strcmp(acc_name, "") == 0)
-	{
-		return -1;
-	}
 	for (int i = 0; i < MAX_CUSTOMERS; i++)
 	{
-		if (customers[i].accountName != NULL)
+		if (strcmp(customers[i].accountName, acc_name) == 0)
 		{
-			if (strcmp(customers[i].accountName, acc_name) == 0 && customers[i].isInUse != 1)
+			if(customers[i].isInUse != 1)
 			{
 				customers[i].isInUse = 1;
 				return i;
 			}
+			else
+			{
+				return ACCOUNT_IN_USE;
+			}				
 		}
 	}
-	return -1;
+	return NO_ACCOUNT;
 }
 
 int createAccount(char *acc_name)
 {
-
-	int i;
-	if (strlen(acc_name) > 100)
+	for(int i=0; i < MAX_CUSTOMERS; i++)
 	{
-		return -1;
-	}
-
-	for (i = 0; i < MAX_CUSTOMERS; i++)
-	{
-
-		if (customers[i].accountName != NULL && strcmp(customers[i].accountName, acc_name) == 0)
+		if(strcmp(customers[i].accountName, acc_name) == 0)
 		{
-			return -1;
+			return ACCOUNT_EXISTS;
 		}
 	}
 	/* go through bank struct */
-	for (i = 0; i < MAX_CUSTOMERS; i++)
+	for (int i = 0; i < MAX_CUSTOMERS; i++)
 	{
-		/*
-		 * bank struct initializes account_name to "" so gotta check if it's intact a.k.a still emmpty.
-		 */
 		if (strcmp(customers[i].accountName, "") == 0)
 		{
-			strcat(customers[i].accountName, acc_name);
+			strcpy(customers[i].accountName, acc_name);
 			printf("%s\n", customers[i].accountName);
 			return i;
 		}
 	}
-	return -1;
+	return SERVER_FULL;
 }

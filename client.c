@@ -1,114 +1,271 @@
 #include <arpa/inet.h>
-#include <errno.h>
-#include <pthread.h>
-#include <signal.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <unistd.h>
 
-#define CLIENT_PORT 35532
 #define SERVER_IP "127.0.0.1" // MODIFY LATER
+#define SERVER_PORT 35532
 
-void* command_input_thread(void *arg);
-void* server_output_thread(void *arg);
+int clientSocket = -1;
+char buffer[256], buffer2[100];
+char name[100];
 
-void set_iaddr_str(struct sockaddr_in *sockaddr, const char *ip, unsigned int port);
+const char* input_string(char* string, int capacity);
+void press_enter();
+void clear_screen();
+void send_and_recv();
+void load_from_file(const char* fileName);
+
+int sock_to_server();
+void bank_menu();
+
+void create_account();
+
+void login();
+void access_account();
+void withdraw();
+void deposit();
+void transfer();
+
+void credit_screen();
+void disconnection();
 
 int main()
 {
-	int clientSocket;
-	char *func = "main";
-	struct sockaddr_in addr;
-	pthread_t tid;
+	clientSocket = sock_to_server();
+	bank_menu(clientSocket);
+	credit_screen();
+	return 0;
+}
 
-	set_iaddr_str(&addr, SERVER_IP, CLIENT_PORT);
-	do
+// Function for inputting strings that may contain spaces
+const char* input_string(char* string, int capacity)
+{
+	fgets(string, capacity, stdin);
+	size_t pos = strcspn(string, "\n");
+	if(string[pos] == '\n')
 	{
-		errno = 0;
-		printf("Connecting to server %s ...\n", SERVER_IP);
-		if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) == -1)
-		{
-			printf("socket() failed in %s()\n", func);
-			return -1;
-		}
-		else if (connect(clientSocket, (const struct sockaddr *)&addr, sizeof(addr)) == -1)
-		{
-			close(clientSocket);
-		}
-		sleep(3);
-	} while (errno == ECONNREFUSED);
-
-	if (errno != 0)
-	{
-		printf("Could not connect to server %s errno %d\n", SERVER_IP, errno);
+		string[pos] = '\0';
 	}
 	else
 	{
-
-		if (pthread_create(&tid, NULL, command_input_thread, &clientSocket) != 0)
-		{
-			printf("pthread_create() for command_input_thread failed in %s()\n", func);
-			return 0;
-		}
-		else if (pthread_create(&tid, NULL, server_output_thread, &clientSocket) != 0)
-		{
-			printf("pthread_create() failed in %s()\n", func);
-			return 0;
-		}
+		int ch;
+		while((ch=getchar())!='\n' && ch!=EOF)
+		{}
 	}
-	printf("Connected to server %s\n", SERVER_IP);
-	pthread_exit(0);
+	return string;
 }
 
-void *command_input_thread(void *arg)
+// Function that keeps taking input until user presses enter
+void press_enter()
 {
-	int inputSocket		= *(int *)arg;
-	char prompt[]		= "\nCmd>>";
-	int len				= 0;
-	char string[512]	= "";
+	printf("Press enter to continue...");
+	input_string(buffer, 1);
+}
 
-	write(1, prompt, sizeof(prompt));
+// Function that clears terminal screen similiar to clear command
+void clear_screen()
+{
+	// \x1B[2J		-> Escape sequence to clear screen
+	// \x1B[0;0H	-> Escape sequence to move cursor to position (0, 0)
+	printf("\x1B[2J\x1B[0;0H");
 
+	// Flush standard output so that is is immediately visible
+	fflush(stdout);
+}
+
+int sock_to_server()
+{
+	int sock = socket(AF_INET, SOCK_STREAM, 0);
+	if ( sock < 3)
+	{
+		printf("Error: Unable to create a socket. Terminating program...\n");
+		exit(EXIT_FAILURE);
+	}
+
+	const char* ip = SERVER_IP;
+	in_port_t port = SERVER_PORT;
+
+	struct sockaddr_in sockaddr_in;
+	memset(&sockaddr_in, 0, sizeof sockaddr_in);
+	sockaddr_in.sin_family = AF_INET;
+	inet_pton(AF_INET, ip, &sockaddr_in.sin_addr.s_addr);
+	sockaddr_in.sin_port = htons(port);
+	
 	do
 	{
-		fflush(stdin);
-		len = read(0, string, sizeof(string));
-		string[len] = '\0';
-
+		printf("\nAttempting to connect to banking server...\n");
 		sleep(1);
-	} while (write(inputSocket, string, strlen(string) + 1) != -1);
+		if (connect(sock, (struct sockaddr*)&sockaddr_in, sizeof sockaddr_in) == 0)
+		{
+			break;
+		}
 
-	close(inputSocket);
-	return 0;
+		close(sock);
+		printf("Error: Could not connect to server. Trying again in 3 seconds...\n");
+		sleep(2);
+
+	} while(1);
+	
+	printf("Successfully connected to banking server.\n\n");
+	press_enter();
+	return sock;
 }
 
-void *server_output_thread(void *arg)
-{
-	int outputSocket;
-	char buffer[512];
-	char output[526];
-	outputSocket = *(int *)arg;
-
-	while (read(outputSocket, buffer, sizeof(buffer)) != 0)
+void send_and_recv(){
+	int length = strlen(buffer)+1;
+	if(write(clientSocket, buffer, length) != length 
+		|| read(clientSocket, buffer, sizeof(buffer)) < 0)
 	{
-		sprintf(output, "\nBank>>%s\nCmd>>", buffer);
-		write(1, output, strlen(output));
+		disconnection();
 	}
-
-	fflush(stdin);
-	printf("Server disconected, ending session.\n");
-	close(outputSocket);
-	exit(-1);
-	return 0;
 }
 
-void set_iaddr_str(struct sockaddr_in *sockaddr, const char *ip, unsigned int port)
+void bank_menu()
 {
-	memset(sockaddr, 0, sizeof*sockaddr);
-	sockaddr->sin_family = AF_INET;
-	inet_pton(AF_INET, ip, &sockaddr->sin_addr.s_addr);
-	sockaddr->sin_port = htons(port);
+	char option;
+	do
+	{
+		clear_screen();
+		printf("\nSure Ya Bank Menu\n");
+		printf("\nOptions\n");
+		printf("\na. Create an account\n");
+		printf("b. Login\n");
+		printf("c. Exit\n");
+		printf("\nEnter your choice: ");
+		input_string(buffer, 2);
+		option = tolower(buffer[0]);
+		switch(option)
+		{
+		case 'a':
+			create_account();
+			break;
+		case 'b':
+			login();
+			break;
+		case 'c':
+			strcpy(buffer, "quit");
+			send_and_recv();
+			break;
+		default:
+			printf("Error: Invalid option.\n\n");
+			press_enter();
+		}
+	}while(option != 'c');
+}
+
+void login()
+{
+	clear_screen();
+	printf("\nSure Ya Bank Account Login\n");
+	printf("\nEnter name: ");
+	input_string(name, 100);
+	sprintf(buffer, "serve %s", name);
+	send_and_recv();
+
+	if(strncmp(buffer, "Success: ", 9) == 0)
+	{
+		access_account();
+	} 
+	else
+	{
+		printf("%s\n\n", buffer);
+		press_enter();
+	}
+}
+
+void access_account()
+{
+	char option;
+	int length;
+	do{
+		sprintf(buffer, "query %s", name);
+		send_and_recv();
+
+		clear_screen();
+		printf("\nAccessing Sure Ya Bank Account\n");
+		printf("%s\n\n", buffer);
+		printf("Options\n");
+		printf("\na. Withdraw Money\n");
+		printf("b. Deposit Money\n");
+		printf("c. Transfer Money\n");
+		printf("d. Log Out\n");
+		printf("\nEnter your choice: ");
+		input_string(buffer, 2);
+		option = tolower(buffer[0]);
+		switch(option){
+		case 'a':
+			printf("Enter amount to withdraw: ");
+			input_string(buffer2, 20);
+			sprintf(buffer, "withdraw %s", buffer2);
+			break;
+		case 'b':
+			printf("Enter amount to deposit: ");
+			input_string(buffer, 20);
+			sprintf(buffer, "deposit %s", buffer2);
+			break;
+		case 'c':
+			/*
+			printf("Enter account name to transfer to: ");
+			input_string(buffer2, 100);
+			printf("\nEnter amount to transfer: ");
+			input_string(buffer, 20);
+			*/
+			break;
+		case 'd':
+			strcpy(buffer, "end");
+			break;
+		default:
+			printf("Error: Invalid choice.\n\n");
+			press_enter();
+		}
+
+		if('a' <= option && option <= 'd'){
+			send_and_recv();
+			printf("\n%s\n\n", buffer);
+			press_enter();
+		}
+	}while(option != 'd');
+	
+	strcpy(buffer, "end");
+	length = strlen(buffer)+1;
+	if(write(clientSocket, buffer, length) != length)
+	{
+		disconnection();
+	}
+}
+
+void create_account(){
+	clear_screen();
+	printf("\nCreating a Sure Ya Bank Account\n");
+	printf("\nEnter name: ");
+	input_string(name, 100);
+	sprintf(buffer, "create %s", name);
+	int length = strlen(buffer)+1;
+	if(write(clientSocket, buffer, length) != length 
+		|| read(clientSocket, buffer, sizeof(buffer)) < 0)
+	{
+		disconnection();
+	}
+	printf("%s\n\n", buffer);
+	press_enter();
+}
+
+void load_from_file(const char* fileName){
+
+}
+
+void credit_screen(){
+	clear_screen();
+	load_from_file("credit.txt");
+}
+
+void disconnection(){
+	clear_screen();
+	load_from_file("disconnect.txt");
+	close(clientSocket);
+	exit(EXIT_FAILURE);
 }
