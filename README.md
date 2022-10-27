@@ -16,7 +16,7 @@ synchronization**, **deadlock handling**, **mutex locks**, **concurrent client-s
 
 Our prototype CLI application has the capacity to handle up to *20 concurrent clients* in one session, the capacity can be ramped up as and when required. The code makes heavy use of threads in various aspects ranging from accepting sessions, handling client inputs, opening, and closing connections, etc.
 
-### Running the application
+### Running the application:-
 
 In the project directory, you can run: `make`
 
@@ -25,5 +25,7 @@ This will generate all the executable files required to run the application.
 Start the server and client respectively by running `./server` and `./client`.
 
 All the functions can be tested with the help of menu-driven program in the client side, have a look at what server logs in the terminal too!
+
+#### Detailed explanation can be found [here](https://github.com/geekyprawins/Multithreaded-Banking/raw/master/Project-Report.pdf).
 
 
