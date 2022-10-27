@@ -119,7 +119,7 @@ int sock_to_server()
 void send_and_recv(){
 	int length = strlen(buffer)+1;
 	if(write(clientSocket, buffer, length) != length 
-		|| read(clientSocket, buffer, sizeof(buffer)) < 0)
+		|| read(clientSocket, buffer, sizeof(buffer)) <= 0)
 	{
 		disconnection();
 	}
@@ -240,7 +240,7 @@ void create_account()
 	sprintf(buffer, "create %s", name);
 	int length = strlen(buffer)+1;
 	if(write(clientSocket, buffer, length) != length 
-		|| read(clientSocket, buffer, sizeof(buffer)) < 0)
+		|| read(clientSocket, buffer, sizeof(buffer)) <= 0)
 	{
 		disconnection();
 	}
