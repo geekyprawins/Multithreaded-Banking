@@ -1,0 +1,7 @@
+Praveen: Client and server API
+
+Yashwanth: Client interface
+
+Sunag: Periodic signal raising code and server side processing
+
+Gautham: Structures and restriction to access to struct through mutex locks and semaphores
